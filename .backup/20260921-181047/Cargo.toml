@@ -1,0 +1,19 @@
+[package]
+name = "yeti3-cleaner"
+version = "0.2.0"
+edition = "2024"
+description = "High quality macOS disk cleaner for Apple Silicon"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+dirs = "6"
+humansize = "2"
+libc = "0.2.189"
+objc2 = "0.6.4"
+objc2-app-kit = { version = "0.3.2", features = ["NSApplication", "NSMenu", "NSMenuItem", "NSStatusBar", "NSStatusItem", "NSImage", "NSAlert", "NSControl", "NSResponder", "NSRunningApplication"] }
+objc2-foundation = "0.3.2"
+rusqlite = { version = "0.40.2", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+walkdir = "2"
