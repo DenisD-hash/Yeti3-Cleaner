@@ -1,2 +1,2 @@
 588fafa71b9b244805edab4baa186d93e4f7353cfc2ed732dc9e116342c1ff69  downloads/Yeti3-Cleaner-0.3.0-arm64.dmg
-cdcaf655e9aa6d09716d03eaaf3f8f8272aca0248645b19c7cfcd5454562ad13  downloads/Yeti3-Cleaner-0.3.0-arm64.zip
+01fe03266f5946d13553b5d4eab293047e7c32a02cd38aec33434d2c1889a2de  downloads/Yeti3-Cleaner-0.3.0-arm64.zip
