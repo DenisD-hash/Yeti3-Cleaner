@@ -2345,6 +2345,41 @@ fn make_label(
 
     label.setFrame(NSRect::new(NSPoint::new(x, y), NSSize::new(width, height)));
 
+    unsafe {
+        let font: *mut AnyObject = if height >= 24.0 {
+            msg_send![
+                class!(NSFont),
+                boldSystemFontOfSize: 16.0f64
+            ]
+        } else {
+            msg_send![
+                class!(NSFont),
+                systemFontOfSize: 12.5f64
+            ]
+        };
+
+        let _: () = msg_send![
+            &*label,
+            setFont: font
+        ];
+
+        let color = if height >= 24.0 {
+            statistics_color(1.0, 1.0, 1.0, 1.0)
+        } else {
+            statistics_color(0.72, 0.86, 0.94, 1.0)
+        };
+
+        let _: () = msg_send![
+            &*label,
+            setTextColor: color
+        ];
+
+        let _: () = msg_send![
+            &*label,
+            setDrawsBackground: false
+        ];
+    }
+
     parent.addSubview(&label);
 }
 
@@ -2360,7 +2395,7 @@ fn make_checkbox(
     y: f64,
     width: f64,
 ) {
-    let frame = NSRect::new(NSPoint::new(x, y), NSSize::new(width, 22.0));
+    let frame = NSRect::new(NSPoint::new(x, y), NSSize::new(width, 24.0));
 
     let button: Retained<NSButton> = unsafe {
         msg_send![
@@ -2370,14 +2405,48 @@ fn make_checkbox(
     };
 
     unsafe {
-        let _: () = msg_send![&*button, setButtonType: 3isize];
-        let _: () = msg_send![&*button, setTitle: &*ns(title)];
-        let _: () = msg_send![&*button, setTag: tag];
         let _: () = msg_send![
             &*button,
-            setAction: Some(objc2::sel!(toggleSetting:))
+            setButtonType: 3isize
         ];
-        let _: () = msg_send![&*button, setTarget: controller as &AnyObject];
+
+        let _: () = msg_send![
+            &*button,
+            setTitle: &*ns(title)
+        ];
+
+        let _: () = msg_send![
+            &*button,
+            setTag: tag
+        ];
+
+        let _: () = msg_send![
+            &*button,
+            setAction: Some(
+                objc2::sel!(toggleSetting:)
+            )
+        ];
+
+        let _: () = msg_send![
+            &*button,
+            setTarget: controller as &AnyObject
+        ];
+
+        let _: () = msg_send![
+            &*button,
+            setContentTintColor:
+                statistics_color(
+                    0.20,
+                    0.82,
+                    1.0,
+                    1.0
+                )
+        ];
+
+        let _: () = msg_send![
+            &*button,
+            setWantsLayer: true
+        ];
     }
 
     button.setState(if enabled {
@@ -2385,6 +2454,40 @@ fn make_checkbox(
     } else {
         NSControlStateValueOff
     });
+
+    /*
+     * NSButton checkbox title may otherwise inherit
+     * an AppKit appearance-dependent text color.
+     *
+     * Force an attributed title with our ice palette.
+     */
+    unsafe {
+        let attributed: *mut AnyObject = msg_send![class!(NSAttributedString), alloc];
+
+        let attributes: *mut AnyObject = msg_send![
+            class!(NSDictionary),
+            dictionaryWithObject:
+                statistics_color(
+                    0.90,
+                    0.97,
+                    1.0,
+                    1.0
+                ),
+            forKey:
+                &*ns("NSColor")
+        ];
+
+        let attributed: *mut AnyObject = msg_send![
+            attributed,
+            initWithString: &*ns(title),
+            attributes: attributes
+        ];
+
+        let _: () = msg_send![
+            &*button,
+            setAttributedTitle: attributed
+        ];
+    }
 
     parent.addSubview(&button);
 }
@@ -2397,7 +2500,7 @@ fn make_locked_checkbox(
     y: f64,
     width: f64,
 ) {
-    let frame = NSRect::new(NSPoint::new(x, y), NSSize::new(width, 22.0));
+    let frame = NSRect::new(NSPoint::new(x, y), NSSize::new(width, 24.0));
 
     let button: Retained<NSButton> = unsafe {
         msg_send![
@@ -2407,12 +2510,62 @@ fn make_locked_checkbox(
     };
 
     unsafe {
-        let _: () = msg_send![&*button, setButtonType: 3isize];
-        let _: () = msg_send![&*button, setTitle: &*ns(title)];
+        let _: () = msg_send![
+            &*button,
+            setButtonType: 3isize
+        ];
+
+        let _: () = msg_send![
+            &*button,
+            setTitle: &*ns(title)
+        ];
+
+        let _: () = msg_send![
+            &*button,
+            setContentTintColor:
+                statistics_color(
+                    0.40,
+                    0.86,
+                    1.0,
+                    1.0
+                )
+        ];
     }
 
     button.setState(NSControlStateValueOn);
     button.setEnabled(false);
+
+    /*
+     * Disabled AppKit controls normally become too dim
+     * for the dark Glass + Ice surface.
+     */
+    unsafe {
+        let attributed: *mut AnyObject = msg_send![class!(NSAttributedString), alloc];
+
+        let attributes: *mut AnyObject = msg_send![
+            class!(NSDictionary),
+            dictionaryWithObject:
+                statistics_color(
+                    0.58,
+                    0.80,
+                    0.90,
+                    1.0
+                ),
+            forKey:
+                &*ns("NSColor")
+        ];
+
+        let attributed: *mut AnyObject = msg_send![
+            attributed,
+            initWithString: &*ns(title),
+            attributes: attributes
+        ];
+
+        let _: () = msg_send![
+            &*button,
+            setAttributedTitle: attributed
+        ];
+    }
 
     parent.addSubview(&button);
 }
@@ -2440,12 +2593,82 @@ fn make_age_field(
     field.setStringValue(&ns(&value.to_string()));
 
     unsafe {
-        let _: () = msg_send![&*field, setTag: tag];
         let _: () = msg_send![
             &*field,
-            setAction: Some(objc2::sel!(ageChanged:))
+            setTag: tag
         ];
-        let _: () = msg_send![&*field, setTarget: controller as &AnyObject];
+
+        let _: () = msg_send![
+            &*field,
+            setAction: Some(
+                objc2::sel!(ageChanged:)
+            )
+        ];
+
+        let _: () = msg_send![
+            &*field,
+            setTarget: controller as &AnyObject
+        ];
+
+        let _: () = msg_send![
+            &*field,
+            setTextColor:
+                statistics_color(
+                    1.0,
+                    1.0,
+                    1.0,
+                    1.0
+                )
+        ];
+
+        let _: () = msg_send![
+            &*field,
+            setBackgroundColor:
+                statistics_color(
+                    0.025,
+                    0.105,
+                    0.145,
+                    0.96
+                )
+        ];
+
+        let _: () = msg_send![
+            &*field,
+            setDrawsBackground: true
+        ];
+
+        let _: () = msg_send![
+            &*field,
+            setBezeled: true
+        ];
+
+        let _: () = msg_send![
+            &*field,
+            setWantsLayer: true
+        ];
+
+        let layer: *mut AnyObject = msg_send![&*field, layer];
+
+        if !layer.is_null() {
+            let border = statistics_color(0.10, 0.72, 1.0, 0.60);
+
+            let border_cg: *mut AnyObject = msg_send![border, CGColor];
+
+            let _: () = msg_send![
+                layer,
+                setBorderColor: border_cg
+            ];
+
+            let _: () = msg_send![
+                layer,
+                setBorderWidth: 1.0f64
+            ];
+
+            let _: () = msg_send![
+                layer,
+                setCornerRadius: 7.0f64
+            ];
+        }
     }
 
     parent.addSubview(&field);
@@ -2464,7 +2687,7 @@ fn make_action_button(
     y: f64,
     width: f64,
 ) {
-    let frame = NSRect::new(NSPoint::new(x, y), NSSize::new(width, 32.0));
+    let frame = NSRect::new(NSPoint::new(x, y), NSSize::new(width, 34.0));
 
     let button: Retained<NSButton> = unsafe {
         msg_send![
@@ -2474,10 +2697,99 @@ fn make_action_button(
     };
 
     unsafe {
-        let _: () = msg_send![&*button, setTitle: &*ns(title)];
-        let _: () = msg_send![&*button, setBezelStyle: 1isize];
-        let _: () = msg_send![&*button, setAction: Some(selector)];
-        let _: () = msg_send![&*button, setTarget: controller as &AnyObject];
+        let _: () = msg_send![
+            &*button,
+            setTitle: &*ns(title)
+        ];
+
+        let _: () = msg_send![
+            &*button,
+            setBezelStyle: 1isize
+        ];
+
+        let _: () = msg_send![
+            &*button,
+            setAction: Some(selector)
+        ];
+
+        let _: () = msg_send![
+            &*button,
+            setTarget: controller as &AnyObject
+        ];
+
+        let _: () = msg_send![
+            &*button,
+            setContentTintColor:
+                statistics_color(
+                    1.0,
+                    1.0,
+                    1.0,
+                    1.0
+                )
+        ];
+
+        let _: () = msg_send![
+            &*button,
+            setWantsLayer: true
+        ];
+
+        let layer: *mut AnyObject = msg_send![&*button, layer];
+
+        if !layer.is_null() {
+            let background = statistics_color(0.035, 0.17, 0.23, 0.98);
+
+            let background_cg: *mut AnyObject = msg_send![background, CGColor];
+
+            let border = statistics_color(0.10, 0.76, 1.0, 0.58);
+
+            let border_cg: *mut AnyObject = msg_send![border, CGColor];
+
+            let _: () = msg_send![
+                layer,
+                setBackgroundColor: background_cg
+            ];
+
+            let _: () = msg_send![
+                layer,
+                setBorderColor: border_cg
+            ];
+
+            let _: () = msg_send![
+                layer,
+                setBorderWidth: 1.0f64
+            ];
+
+            let _: () = msg_send![
+                layer,
+                setCornerRadius: 10.0f64
+            ];
+        }
+
+        let attributed: *mut AnyObject = msg_send![class!(NSAttributedString), alloc];
+
+        let attributes: *mut AnyObject = msg_send![
+            class!(NSDictionary),
+            dictionaryWithObject:
+                statistics_color(
+                    1.0,
+                    1.0,
+                    1.0,
+                    1.0
+                ),
+            forKey:
+                &*ns("NSColor")
+        ];
+
+        let attributed: *mut AnyObject = msg_send![
+            attributed,
+            initWithString: &*ns(title),
+            attributes: attributes
+        ];
+
+        let _: () = msg_send![
+            &*button,
+            setAttributedTitle: attributed
+        ];
     }
 
     parent.addSubview(&button);

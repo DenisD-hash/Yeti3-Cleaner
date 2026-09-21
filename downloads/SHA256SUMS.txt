@@ -1,2 +1,2 @@
-588fafa71b9b244805edab4baa186d93e4f7353cfc2ed732dc9e116342c1ff69  downloads/Yeti3-Cleaner-0.3.0-arm64.dmg
-5b85771155491eac286a99fbd2668a7db02bc0a306098934bcfad4847cb5e738  downloads/Yeti3-Cleaner-0.3.0-arm64.zip
+a98ef8364f12810bbccd843908346df62f53ee7034ea28bd8e6625c1803f7958  /Users/lodos/GIT/MVP/Yeti3-Cleaner/downloads/Yeti3-Cleaner-0.3.0-arm64.dmg
+5981fad56b00f68df8ab8be93afc9257d1a386d632dd5370243a0c61ac8a7b4f  /Users/lodos/GIT/MVP/Yeti3-Cleaner/downloads/Yeti3-Cleaner-0.3.0-arm64.zip
