@@ -1,5 +1,10 @@
-/target
-/dist
+/target/
+/dist/
+/release/
+/.backup/
 .DS_Store
 .fleet/
+.idea/
 *.backup.*
+*.tmp
+*.log
