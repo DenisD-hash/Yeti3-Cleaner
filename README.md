@@ -1,6 +1,3 @@
-cd "$HOME/GIT/MVP/Yeti3-Cleaner" || exit 1
-
-cat > README.md <<'EOF'
 # YETI³ Cleaner
 
 > **Deep macOS Cleanup**
