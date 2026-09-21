@@ -8,3 +8,6 @@
 *.backup.*
 *.tmp
 *.log
+
+!/downloads/
+!/downloads/**
