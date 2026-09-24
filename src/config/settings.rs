@@ -26,6 +26,8 @@ pub struct MacOsSettings {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BrowserSettings {
+    #[serde(default = "enabled")]
+    pub safari: bool,
     pub chrome: bool,
     pub opera: bool,
     pub firefox: bool,
@@ -121,6 +123,7 @@ impl Default for Settings {
             },
 
             browsers: BrowserSettings {
+                safari: true,
                 chrome: true,
                 opera: true,
                 firefox: true,
@@ -194,3 +197,5 @@ impl Default for Settings {
         }
     }
 }
+
+fn enabled() -> bool { true }

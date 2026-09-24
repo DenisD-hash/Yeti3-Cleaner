@@ -32,7 +32,7 @@ use objc2::{
 };
 
 use objc2_app_kit::{
-    NSApplication, NSApplicationActivationPolicy, NSBackingStoreType, NSButton, NSColor,
+    NSAlert, NSApplication, NSApplicationActivationPolicy, NSBackingStoreType, NSButton, NSColor,
     NSControlStateValueOff, NSControlStateValueOn, NSImage, NSImageView, NSMenu, NSMenuItem,
     NSScrollView, NSStatusBar, NSStatusBarButton, NSTextField, NSVariableStatusItemLength, NSView,
     NSWindow, NSWindowStyleMask,
@@ -138,6 +138,13 @@ define_class!(
                 self.set_stop_visible(true);
                 return;
             }
+
+            let alert = NSAlert::new(self.mtm());
+            alert.setMessageText(&ns("Начать очистку?"));
+            alert.setInformativeText(&ns("Будут удалены данные из включённых категорий и дополнительных папок. Максимальный пресет может удалять локальные резервные копии устройств. Проверьте набор каталогов и план очистки в окне карты диска."));
+            alert.addButtonWithTitle(&ns("Отмена"));
+            alert.addButtonWithTitle(&ns("Очистить"));
+            if alert.runModal() != 1001 { return; }
 
             let executable = cleaner_path();
 
@@ -316,6 +323,16 @@ define_class!(
             _sender: Option<&AnyObject>,
         ) {
             show_statistics_window(self);
+        }
+
+        #[unsafe(method(openDiskMap:))]
+        fn open_disk_map(&self, _sender: Option<&AnyObject>) {
+            open_disk_helper(false);
+        }
+
+        #[unsafe(method(checkUpdates:))]
+        fn check_updates(&self, _sender: Option<&AnyObject>) {
+            open_disk_helper(true);
         }
 
         #[unsafe(method(openSettings:))]
@@ -514,7 +531,7 @@ impl Controller {
             match read_latest_result() {
                 Some(result) if result.id > baseline => {
                     self.set_status_text("Y³ ✓");
-                    show_result_popup(self, &result);
+                    if config::load().map(|s| s.behavior.show_reclaimed_space).unwrap_or(true) { show_result_popup(self, &result); }
                 }
 
                 _ => {
@@ -2449,7 +2466,10 @@ fn make_checkbox(
         ];
     }
 
-    button.setState(if enabled {
+    let unsupported = matches!(tag, 2 | 40..=43 | 45..=47 | 70..=72 | 90 | 92);
+    if unsupported { button.setEnabled(false); }
+    let display_title = if unsupported { format!("{title} · позже") } else { title.to_string() };
+    button.setState(if enabled && !unsupported {
         NSControlStateValueOn
     } else {
         NSControlStateValueOff
@@ -2479,7 +2499,7 @@ fn make_checkbox(
 
         let attributed: *mut AnyObject = msg_send![
             attributed,
-            initWithString: &*ns(title),
+            initWithString: &*ns(&display_title),
             attributes: attributes
         ];
 
@@ -2591,6 +2611,7 @@ fn make_age_field(
     };
 
     field.setStringValue(&ns(&value.to_string()));
+    if matches!(tag, 1001 | 1005) { field.setEnabled(false); }
 
     unsafe {
         let _: () = msg_send![
@@ -2803,6 +2824,7 @@ fn set_bool_setting(settings: &mut Settings, tag: isize, value: bool) {
         4 => settings.macos.logs = value,
         5 => settings.macos.crash_reports = value,
 
+        16 => settings.browsers.safari = value,
         10 => settings.browsers.chrome = value,
         11 => settings.browsers.opera = value,
         12 => settings.browsers.firefox = value,
@@ -3069,6 +3091,7 @@ fn show_settings_window(controller: &Controller) {
         y -= 32.0;
 
         let browser_rows = [
+            ("Safari", 16, settings.browsers.safari),
             ("Chrome", 10, settings.browsers.chrome),
             ("Opera", 11, settings.browsers.opera),
             ("Firefox", 12, settings.browsers.firefox),
@@ -3580,6 +3603,10 @@ fn main() {
 
     menu.addItem(&statistics_item);
 
+    menu.addItem(&menu_item(mtm, "Карта диска и каталоги…", objc2::sel!(openDiskMap:), &controller));
+
+    menu.addItem(&menu_item(mtm, "Проверить обновление…", objc2::sel!(checkUpdates:), &controller));
+
     let settings = menu_item(mtm, "Настройки…", objc2::sel!(openSettings:), &controller);
 
     menu.addItem(&settings);
@@ -3621,4 +3648,13 @@ fn main() {
     let _keep_alive = (controller, status_item, menu);
 
     app.run();
+}
+
+fn open_disk_helper(updates: bool) {
+    let engine = cleaner_path();
+    let helper = engine.parent().unwrap().parent().unwrap().join("Helpers/Yeti3-DiskMap.app");
+    let mut command = Command::new("/usr/bin/open");
+    command.arg("-a").arg(helper);
+    if updates { command.args(["-n", "--args", "--updates"]); }
+    if let Err(error) = command.spawn() { eprintln!("Карта диска: {error}"); }
 }

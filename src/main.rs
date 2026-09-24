@@ -1,5 +1,6 @@
 mod config;
 mod history;
+mod folders;
 
 use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand};
@@ -32,6 +33,8 @@ enum Cmd {
 
     /// Latest cleanup result for the macOS UI
     Result,
+    /// Validate a custom cleanup folder without changing anything.
+    CheckFolder { path: PathBuf },
 }
 
 #[derive(Args, Clone)]
@@ -84,6 +87,7 @@ fn main() -> Result<()> {
     match cli.command {
         Cmd::Scan(o) => scan_command(&o),
         Cmd::Clean(o) => clean_command(&o),
+        Cmd::CheckFolder { path } => folders::validate_custom(&path),
         Cmd::Result => {
             println!("{}", history::latest_result_json()?);
             Ok(())
@@ -97,22 +101,26 @@ fn home() -> Result<PathBuf> {
 
 fn roots(o: &Opts) -> Result<Vec<Candidate>> {
     let h = home()?;
+    let settings = config::load()?;
+    let rules = folders::load()?;
     let mut v = Vec::new();
 
     let mut add = |label, rel: &str, age| {
         let p = h.join(rel);
+        if !folders::preset_enabled(label, &settings) || rules.excludes(&p) { return; }
         v.push(Candidate {
             label,
             path: p.clone(),
             root: p,
             bytes: 0,
-            min_age: age,
+            min_age: match label { "Logs" => settings.macos.logs_min_age_days, "Xcode SourcePackages" => settings.development.xcode_source_packages_min_age_days, "Gradle cache" => settings.development.gradle_min_age_days, _ => age },
         });
     };
 
     add("Trash", ".Trash", 0);
     add("Application caches", "Library/Caches", 1);
     add("Logs", "Library/Logs", 2);
+    if settings.browsers.safari { add("Safari cache", "Library/Containers/com.apple.Safari/Data/Library/Caches", 1); }
 
     if o.deep || o.max {
         add("Crash reports", "Library/Logs/DiagnosticReports", 1);
@@ -145,11 +153,19 @@ fn roots(o: &Opts) -> Result<Vec<Candidate>> {
         add("Gradle cache", ".gradle/caches", 14);
     }
 
+    for path in &rules.include {
+        folders::validate_custom(path)?;
+        if !rules.excludes(path) {
+            v.push(Candidate { label: "Пользовательский каталог", path: path.clone(), root: path.clone(), bytes: 0, min_age: 0 });
+        }
+    }
     Ok(v)
 }
 
 fn collect(o: &Opts) -> Result<Vec<Candidate>> {
     let mut result = Vec::new();
+    let settings = config::load()?;
+    let rules = folders::effective_rules(&settings)?;
 
     for root in roots(o)? {
         if !root.path.is_dir() {
@@ -158,12 +174,15 @@ fn collect(o: &Opts) -> Result<Vec<Candidate>> {
 
         let rd = match fs::read_dir(&root.path) {
             Ok(x) => x,
-            Err(_) => continue,
+            Err(error) => { eprintln!("Недоступно: {}: {error}", root.path.display()); continue; },
         };
 
         for e in rd.flatten() {
             let p = e.path();
 
+            if rules.overlaps_exclusion(&p) || config::is_protected(&p) { continue; }
+            let mobile = home()?.join("Library/Application Support/MobileSync/Backup");
+            if o.max && folders::mobile_enabled(&settings)? && (p.starts_with(&mobile) || mobile.starts_with(&p)) { continue; }
             let m = match fs::symlink_metadata(&p) {
                 Ok(x) => x,
                 Err(_) => continue,
@@ -193,6 +212,13 @@ fn collect(o: &Opts) -> Result<Vec<Candidate>> {
         }
     }
 
+    // Prefer the encompassing candidate; never count/delete overlapping roots twice.
+    result.sort_by_key(|c| c.path.components().count());
+    let mut unique: Vec<Candidate> = Vec::new();
+    for candidate in result {
+        if !unique.iter().any(|c| candidate.path.starts_with(&c.path)) { unique.push(candidate); }
+    }
+    let mut result = unique;
     result.sort_by(|a, b| b.bytes.cmp(&a.bytes));
     Ok(result)
 }
@@ -202,7 +228,7 @@ fn scan_command(o: &Opts) -> Result<()> {
     let files = collect(o)?;
     let regular = total(&files);
 
-    let mobile = if o.max {
+    let mobile = if o.max && folders::mobile_enabled(&config::load()?)? {
         tree_size(&home()?.join("Library/Application Support/MobileSync/Backup"))
     } else {
         0
@@ -259,24 +285,12 @@ fn clean_command(c: &CleanOpts) -> Result<()> {
 
     let mobile = home()?.join("Library/Application Support/MobileSync/Backup");
 
-    let mobile_bytes = if c.opts.max { tree_size(&mobile) } else { 0 };
+    let settings = config::load()?;
+    let mobile_allowed = c.opts.max && folders::mobile_enabled(&settings)?;
+    let mobile_bytes = if mobile_allowed { tree_size(&mobile) } else { 0 };
 
     let regular = total(&files);
     let direct = regular.saturating_add(mobile_bytes);
-
-    let history = history::HistoryDb::open()?;
-    let run_id = history.begin_cleanup(
-        before.total,
-        before.free,
-        direct,
-        if c.opts.max {
-            "max"
-        } else if c.opts.deep {
-            "deep"
-        } else {
-            "standard"
-        },
-    )?;
 
     println!("YETI³ CLEANER — CLEAN PLAN");
     println!("────────────────────────────────────────────");
@@ -284,10 +298,8 @@ fn clean_command(c: &CleanOpts) -> Result<()> {
 
     if c.opts.max {
         println!("ALL MobileSync backups    {:>16}", human(mobile_bytes));
-        println!("Homebrew                  managed cleanup");
-        println!("Docker                    cache/images/containers/networks");
         println!("Docker volumes            PROTECTED");
-        println!("Xcode unavailable sims    cleanup");
+        for (program, args) in managed_plan(&settings)? { println!("MANAGED  {} {}", program, args.join(" ")); }
     }
 
     println!("────────────────────────────────────────────");
@@ -301,12 +313,12 @@ fn clean_command(c: &CleanOpts) -> Result<()> {
             println!("DELETE  {:>12}  {}", human(x.bytes), x.path.display());
         }
 
-        if c.opts.max && mobile_bytes > 0 {
+        if mobile_allowed && mobile_bytes > 0 {
             println!("DELETE  {:>12}  {}", human(mobile_bytes), mobile.display());
         }
 
         println!();
-        println!("External cleaners would also run in preview/managed mode.");
+        println!("Предпросмотр завершён. Ни файлы, ни внешние инструменты не изменены.");
         return Ok(());
     }
 
@@ -322,6 +334,20 @@ fn clean_command(c: &CleanOpts) -> Result<()> {
             return Ok(());
         }
     }
+
+    let history = history::HistoryDb::open()?;
+    let run_id = history.begin_cleanup(
+        before.total,
+        before.free,
+        direct,
+        if c.opts.max {
+            "max"
+        } else if c.opts.deep {
+            "deep"
+        } else {
+            "standard"
+        },
+    )?;
 
     let mut removed = 0u64;
     let mut failures = 0usize;
@@ -389,7 +415,7 @@ fn clean_command(c: &CleanOpts) -> Result<()> {
     if c.opts.max {
         println!("\n===== MOBILESYNC =====");
 
-        if mobile.is_dir() {
+        if mobile_allowed && mobile.is_dir() {
             // User policy: remove ALL local iPhone/iPad backups.
             let backup_root = home()?.join("Library/Application Support/MobileSync");
 
@@ -438,29 +464,8 @@ fn clean_command(c: &CleanOpts) -> Result<()> {
             }
         }
 
-        println!("\n===== HOMEBREW =====");
-        run_managed("brew", &["autoremove"]);
-        run_managed("brew", &["cleanup", "--prune=all"]);
-
-        println!("\n===== DOCKER =====");
-
-        if command_ok("docker", &["info"]) {
-            // Intentionally no `docker volume prune`.
-            run_managed("docker", &["builder", "prune", "-af"]);
-            run_managed("docker", &["image", "prune", "-f"]);
-            run_managed("docker", &["container", "prune", "-f"]);
-            run_managed("docker", &["network", "prune", "-f"]);
-
-            println!("Docker volumes preserved.");
-        } else {
-            println!("Docker daemon unavailable — skipped.");
-        }
-
-        println!("\n===== XCODE =====");
-
-        if command_exists("xcrun") {
-            run_managed("xcrun", &["simctl", "shutdown", "all"]);
-            run_managed("xcrun", &["simctl", "delete", "unavailable"]);
+        for (program, args) in managed_plan(&settings)? {
+            if !run_managed(program, &args) { failures += 1; }
         }
     }
 
@@ -518,13 +523,13 @@ fn print_special_status() {
     }
 }
 
-fn run_managed(program: &str, args: &[&str]) {
+fn run_managed(program: &str, args: &[&str]) -> bool {
     println!("$ {} {}", program, args.join(" "));
 
     match Command::new(program).args(args).status() {
-        Ok(status) if status.success() => {}
-        Ok(status) => eprintln!("{program} exited with {status}"),
-        Err(e) => eprintln!("{program}: {e}"),
+        Ok(status) if status.success() => true,
+        Ok(status) => { eprintln!("{program} exited with {status}"); false },
+        Err(e) => { eprintln!("{program}: {e}"); false },
     }
 }
 
@@ -568,6 +573,8 @@ fn validate(path: &Path, root: &Path) -> Result<()> {
         anyhow::bail!("outside allowlisted root");
     }
 
+    if config::is_protected(&cp) || folders::effective_rules(&config::load()?)?.overlaps_exclusion(&cp) { anyhow::bail!("protected or excluded path"); }
+
     let protected = [
         h.join("Desktop"),
         h.join("Documents"),
@@ -592,6 +599,7 @@ fn validate(path: &Path, root: &Path) -> Result<()> {
 fn empty_directory(dir: &Path) -> Result<()> {
     for e in fs::read_dir(dir)? {
         let p = e?.path();
+        validate(&p, dir)?;
         remove(&p)?;
     }
     Ok(())
@@ -605,6 +613,17 @@ fn remove(path: &Path) -> Result<()> {
     }
 
     if m.is_dir() {
+        use std::os::unix::fs::MetadataExt;
+        let device = m.dev();
+        // Validate the entire tree before any recursive removal. A new mount or
+        // nested repository must not be deleted by an otherwise valid parent.
+        for entry in WalkDir::new(path).follow_links(false) {
+            let entry = entry?;
+            let metadata = fs::symlink_metadata(entry.path())?;
+            if metadata.dev() != device || config::is_protected(entry.path()) {
+                anyhow::bail!("protected descendant or mounted filesystem: {}", entry.path().display());
+            }
+        }
         fs::remove_dir_all(path)?;
     } else if m.is_file() {
         fs::remove_file(path)?;
@@ -674,4 +693,25 @@ fn disk(path: &str) -> Result<Disk> {
 
 fn human(n: u64) -> String {
     format_size(n, BINARY)
+}
+
+fn managed_plan(s: &config::settings::Settings) -> Result<Vec<(&'static str, Vec<&'static str>)>> {
+    let mut commands = Vec::new();
+    if s.homebrew.enabled {
+        if s.homebrew.autoremove { commands.push(("brew", vec!["autoremove"])); }
+        if s.homebrew.old_versions && s.homebrew.cache && s.homebrew.temporary_builds
+            && !folders::effective_rules(s)?.overlaps_exclusion(&home()?.join("Library/Caches/Homebrew")) {
+            commands.push(("brew", vec!["cleanup", "--prune=all"]));
+        }
+    }
+    if s.docker.enabled {
+        for (enabled, args) in [
+            (s.docker.build_cache, vec!["builder", "prune", "-af"]),
+            (s.docker.unused_images, vec!["image", "prune", "-f"]),
+            (s.docker.stopped_containers, vec!["container", "prune", "-f"]),
+            (s.docker.unused_networks, vec!["network", "prune", "-f"]),
+        ] { if enabled { commands.push(("docker", args)); } }
+    }
+    if s.development.unavailable_simulators { commands.push(("xcrun", vec!["simctl", "delete", "unavailable"])); }
+    Ok(commands)
 }

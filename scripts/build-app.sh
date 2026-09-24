@@ -22,7 +22,7 @@ test -s "$LAUNCHER/frame-23.png"
 
 printf '\n===== BUILD RELEASE =====\n'
 
-RUSTFLAGS="-D warnings" \
+MACOSX_DEPLOYMENT_TARGET=14.0 RUSTFLAGS="-D warnings" \
 cargo build --release \
   --bin yeti3-cleaner \
   --bin yeti3-cleaner-tray
@@ -86,7 +86,7 @@ cat > "$CONTENTS/Info.plist" <<PLIST
     <string>${VERSION}</string>
 
     <key>CFBundleVersion</key>
-    <string>3</string>
+    <string>${VERSION}</string>
 
     <key>LSMinimumSystemVersion</key>
     <string>14.0</string>
@@ -103,6 +103,27 @@ PLIST
 chmod 755 \
   "$MACOS/Yeti3-Cleaner" \
   "$MACOS/yeti3-cleaner-engine"
+
+HELPER="$CONTENTS/Helpers/Yeti3-DiskMap.app"
+mkdir -p "$HELPER/Contents/MacOS" "$HELPER/Contents/Resources"
+xcrun swiftc -O -parse-as-library -target arm64-apple-macosx14.0 \
+  native/DiskScanner.swift native/UpdatePolicy.swift native/DiskMap.swift -o "$HELPER/Contents/MacOS/yeti3-disk-map"
+cp "$ICON" "$HELPER/Contents/Resources/Yeti3.icns"
+cat > "$HELPER/Contents/Info.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>CFBundleIdentifier</key><string>ru.yeti3.cleaner.diskmap</string>
+<key>CFBundleName</key><string>YETI³ Карта диска</string>
+<key>CFBundleExecutable</key><string>yeti3-disk-map</string>
+<key>CFBundlePackageType</key><string>APPL</string>
+<key>CFBundleIconFile</key><string>Yeti3.icns</string>
+<key>CFBundleShortVersionString</key><string>${VERSION}</string>
+<key>CFBundleVersion</key><string>${VERSION}</string>
+<key>LSMinimumSystemVersion</key><string>14.0</string>
+</dict></plist>
+PLIST
+codesign --force --sign - "$HELPER"
 
 printf '\n===== VERIFY =====\n'
 

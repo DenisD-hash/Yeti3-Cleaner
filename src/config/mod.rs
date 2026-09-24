@@ -62,7 +62,13 @@ pub fn is_protected(path: &Path) -> bool {
     };
 
     let protected = [
-        home.clone(),
+        home.join(".ssh"),
+        home.join(".gnupg"),
+        home.join(".aws"),
+        home.join(".docker"),
+        home.join(".kube"),
+        home.join(".codex"),
+        home.join("Library/Application Support/Yeti3-Cleaner"),
         home.join("Downloads"),
         home.join("Documents"),
         home.join("GIT"),
@@ -79,7 +85,8 @@ pub fn is_protected(path: &Path) -> bool {
         home.join("Library/Group Containers/group.net.whatsapp.WhatsApp.shared"),
     ];
 
-    protected.iter().any(|p| path == p || path.starts_with(p))
+    path.components().any(|part| part.as_os_str() == ".git") || path == home || path == Path::new("/") || !path.starts_with(&home)
+        || protected.iter().any(|p| path == p || path.starts_with(p))
 }
 
 #[cfg(test)]

@@ -1,0 +1,59 @@
+"""Run cleanup only inside a disposable HOME; never against the user's files."""
+import json
+import os
+import subprocess
+import tempfile
+import time
+from pathlib import Path
+
+engine = Path(__file__).resolve().parents[1] / 'target/release/yeti3-cleaner'
+with tempfile.TemporaryDirectory(prefix='yeti3-cleaner-test-') as temp:
+    home = Path(temp).resolve()
+    env = {**os.environ, 'HOME': str(home)}
+    def run(*args, ok=True):
+        p = subprocess.run([str(engine), *args], env=env, text=True, capture_output=True)
+        if ok:
+            assert p.returncode == 0, p.stderr
+        return p
+    def file(rel):
+        p = home / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(b'x' * 128)
+        for q in [p, p.parent]:
+            os.utime(q, (time.time() - 30*86400,)*2)
+        return p
+    remove = file('Library/Caches/disposable/a')
+    keep = file('Library/Caches/keep/a')
+    pip = file('Library/Caches/pip/a')
+    docs = file('Documents/do-not-touch')
+    custom = file('scratch/a')
+    nested_repo = file('scratch/repo/.git/config')
+    run('scan')
+    settings_path = home / 'Library/Application Support/Yeti3-Cleaner/settings.json'
+    settings = json.loads(settings_path.read_text())
+    settings['development']['pip'] = False
+    settings['mobile']['delete_all_local_backups'] = False
+    settings_path.write_text(json.dumps(settings))
+    rules_path = settings_path.with_name('folders.json')
+    rules = {'include': [str(custom.parent)], 'exclude': [str(keep)]}
+    rules_path.write_text(json.dumps(rules))
+    preview = run('clean', '--max', '--dry-run').stdout
+    assert str(remove.parent) in preview and str(custom) in preview
+    assert str(keep.parent) not in preview and str(pip.parent) not in preview
+    assert not settings_path.with_name('history.sqlite3').exists(), 'dry run wrote history'
+    assert run('check-folder', str(home / 'Documents'), ok=False).returncode != 0
+    assert run('check-folder', str(home), ok=False).returncode != 0
+    run('clean', '--yes')  # Standard mode, disposable HOME only; no managed cleaners.
+    assert not remove.exists() and not custom.exists()
+    assert keep.exists() and pip.exists() and docs.exists() and nested_repo.exists()
+    # Overlapping cache presets must appear exactly once in a plan.
+    settings['development']['pip'] = True
+    settings_path.write_text(json.dumps(settings))
+    preview = run('clean', '--max', '--dry-run').stdout
+    deletes = [line for line in preview.splitlines() if line.startswith('DELETE') and '/pip' in line]
+    assert len(deletes) == 1, deletes
+    # Bad rules must fail closed, not revert to broader defaults.
+    rules_path.write_text('{broken')
+    assert run('clean', '--yes', ok=False).returncode != 0
+    assert pip.exists() and keep.exists()
+print('PASS: settings, exclusions, custom folders, protected paths, deduplication, dry-run history and malformed-rule fail-closed behavior')
