@@ -96,5 +96,21 @@ python3 tests/cleanup_integration.py
 Сценарий выпуска создаёт `.app` в `dist/universal`, DMG/ZIP, SHA-256 и manifest в `downloads`.
 Подпись ad-hoc, **без Developer ID и нотариализации Apple**. Не отключайте Gatekeeper целиком.
 
+### Пробная сборка для macOS 12 Monterey
+
+Собирайте на Mac с актуальным SDK и Rust 1.86.0; исходный `master` по-прежнему рассчитан на macOS 14+.
+Для Intel запустите `./scripts/build-app.sh x86_64 12.0` и возьмите
+`dist/x86_64-macos12/Yeti3-Cleaner.app`. Для Apple Silicon замените `x86_64` на `arm64`.
+Обе архитектуры можно собрать командой `./scripts/build-app.sh universal 12.0` после установки
+обоих Rust targets. Отдельный каталог `target/macos12` исключает повторное использование
+бинарников с минимальной macOS 14. Не используйте `scripts/package-release.sh` для этой
+пробной сборки: манифесты выпуска пока предназначены для macOS 14+.
+
+Проверьте `LSMinimumSystemVersion` у основного и вложенного приложения через
+`/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' .../Contents/Info.plist`,
+а `minos` у всех трёх исполняемых файлов через `xcrun vtool -show-build ...`.
+После переноса на Monterey проверьте запуск меню, сканирование, окно подтверждения и карту диска
+до первой очистки. Совместимость с macOS 12 пока не подтверждена на устройстве.
+
 Движок и меню — Rust/AppKit, карта диска — встроенное нативное окно SwiftUI.
 Разработчик: @bonumursi.
