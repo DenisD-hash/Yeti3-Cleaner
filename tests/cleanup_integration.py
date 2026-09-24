@@ -34,6 +34,10 @@ with tempfile.TemporaryDirectory(prefix='yeti3-cleaner-test-') as temp:
     settings['development']['pip'] = False
     settings['mobile']['delete_all_local_backups'] = False
     settings_path.write_text(json.dumps(settings))
+    editor = json.loads(run('settings-data').stdout)
+    assert editor['settings']['development']['pip'] is False
+    assert editor['defaults']['development']['pip'] is True
+    assert any(item['path'] == str(home / 'Library/Caches/pip') for item in editor['presets'])
     rules_path = settings_path.with_name('folders.json')
     rules = {'include': [str(custom.parent)], 'exclude': [str(keep)]}
     rules_path.write_text(json.dumps(rules))
@@ -45,6 +49,7 @@ with tempfile.TemporaryDirectory(prefix='yeti3-cleaner-test-') as temp:
     assert run('check-folder', str(home), ok=False).returncode != 0
     run('clean', '--yes')  # Standard mode, disposable HOME only; no managed cleaners.
     assert (home / 'Documents/Yeti3Cleaner/history.sqlite3').exists()
+    assert run('history-path').stdout.strip() == str(home / 'Documents/Yeti3Cleaner/history.sqlite3')
     assert not remove.exists() and not custom.exists()
     assert keep.exists() and pip.exists() and docs.exists() and nested_repo.exists()
     # Overlapping cache presets must appear exactly once in a plan.

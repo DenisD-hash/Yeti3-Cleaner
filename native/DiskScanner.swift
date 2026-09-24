@@ -1,7 +1,7 @@
 import Foundation
 import Darwin
 
-struct Entry: Identifiable {
+struct Entry: Identifiable, Codable {
     var id: String { url.path }
     let url: URL
     let bytes: Int64

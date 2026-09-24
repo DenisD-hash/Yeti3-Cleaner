@@ -33,6 +33,10 @@ enum Cmd {
 
     /// Latest cleanup result for the macOS UI
     Result,
+    /// Prepare or migrate the shared SQLite database and print its path.
+    HistoryPath,
+    /// Settings and the unchanged built-in folder preset for the native editor.
+    SettingsData,
     /// Validate a custom cleanup folder without changing anything.
     CheckFolder { path: PathBuf },
 }
@@ -88,6 +92,18 @@ fn main() -> Result<()> {
         Cmd::Scan(o) => scan_command(&o),
         Cmd::Clean(o) => clean_command(&o),
         Cmd::CheckFolder { path } => folders::validate_custom(&path),
+        Cmd::SettingsData => {
+            let settings = config::load()?;
+            let defaults = config::settings::Settings::default();
+            let presets = roots_for(&Opts { deep: true, dev: true, max: true, verbose: false }, &defaults, &folders::FolderRules::default())?;
+            println!("{}", serde_json::json!({"settings": settings, "defaults": defaults, "presets": presets.iter().map(|p| serde_json::json!({"label": p.label, "path": p.path, "days": p.min_age})).collect::<Vec<_>>() }));
+            Ok(())
+        }
+        Cmd::HistoryPath => {
+            let _db = history::HistoryDb::open()?;
+            println!("{}", history::database_path()?.display());
+            Ok(())
+        }
         Cmd::Result => {
             println!("{}", history::latest_result_json()?);
             Ok(())
@@ -100,9 +116,11 @@ fn home() -> Result<PathBuf> {
 }
 
 fn roots(o: &Opts) -> Result<Vec<Candidate>> {
+    roots_for(o, &config::load()?, &folders::load()?)
+}
+
+fn roots_for(o: &Opts, settings: &config::settings::Settings, rules: &folders::FolderRules) -> Result<Vec<Candidate>> {
     let h = home()?;
-    let settings = config::load()?;
-    let rules = folders::load()?;
     let mut v = Vec::new();
 
     let mut add = |label, rel: &str, age| {

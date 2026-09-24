@@ -3,7 +3,7 @@ import AppKit
 import CryptoKit
 
 private let support = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/Yeti3-Cleaner")
-private let releaseVersion = Bundle.main.object(forInfoDictionaryKey: "YetiReleaseVersion") as? String ?? "0.4.1-rc.1"
+private let releaseVersion = Bundle.main.object(forInfoDictionaryKey: "YetiReleaseVersion") as? String ?? "0.4.1-rc.2"
 private let cyan = Color(red: 0.2, green: 0.85, blue: 0.95)
 private func human(_ bytes: Int64) -> String { ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file) }
 
@@ -11,6 +11,7 @@ private func human(_ bytes: Int64) -> String { ByteCountFormatter.string(fromByt
     @Published var root = FileManager.default.homeDirectoryForCurrentUser
     @Published var entries: [Entry] = []
     @Published var selected: Entry?
+    @Published var cacheStatus = ""
     @Published var busy = false
     @Published var status = "Выберите диск или папку. Сканирование ничего не удаляет."
     @Published var error: String?
@@ -55,6 +56,22 @@ private func human(_ bytes: Int64) -> String { ByteCountFormatter.string(fromByt
             saveRules(Array(Set(include + [path])).sorted(), exclude)
         } catch { self.error = error.localizedDescription }
     }
+    func replacePreset(_ old: String, with url: URL) {
+        guard reloadRules() else { return }
+        let path = url.standardizedFileURL.resolvingSymlinksInPath().path
+        guard path != old else { return }
+        if path.hasPrefix(old + "/") || old.hasPrefix(path + "/") || exclude.contains(where: { path == $0 || path.hasPrefix($0 + "/") || $0.hasPrefix(path + "/") }) {
+            error = "Выбранная папка пересекается с исключением или прежним каталогом. Выберите отдельную папку: исключённые данные не включаются в очистку."; return
+        }
+        do {
+            let process = Process(); process.executableURL = engine; process.arguments = ["check-folder", path]
+            let pipe = Pipe(); process.standardError = pipe; try process.run()
+            let message = pipe.fileHandleForReading.readDataToEndOfFile(); process.waitUntilExit()
+            guard process.terminationStatus == 0 else { self.error = String(decoding: message, as: UTF8.self); return }
+            let alert = NSAlert(); alert.messageText = "Заменить каталог пресета?"; alert.informativeText = "Исключить: " + old + "\nОчищать содержимое: " + path + "\nНовое правило применяется при следующей очистке, без ограничения возраста файлов."; alert.addButton(withTitle: "Отмена"); alert.addButton(withTitle: "Заменить")
+            if alert.runModal() == .alertSecondButtonReturn { saveRules(Array(Set(include + [path])).sorted(), Array(Set(exclude + [old])).sorted()) }
+        } catch { self.error = error.localizedDescription }
+    }
     func choose(_ action: (URL) -> Void) {
         let panel = NSOpenPanel(); panel.canChooseFiles = false; panel.canChooseDirectories = true
         panel.allowsMultipleSelection = false; panel.prompt = "Выбрать папку"
@@ -62,30 +79,84 @@ private func human(_ bytes: Int64) -> String { ByteCountFormatter.string(fromByt
     }
     func start(_ url: URL) {
         token.cancel(); let cancellation = Cancellation(); token = cancellation
-        root = url; entries = []; selected = nil; busy = true; status = "Сканирование…"
+        root = url; entries = []; selected = nil; busy = true; status = "Читаем сохранённый снимок…"; cacheStatus = ""
+        UserDefaults.standard.set(url.path, forKey: "lastDiskMapRoot")
+        let executable = engine
+        let started = Date()
         DispatchQueue.global(qos: .utility).async {
+            var cache: DiskCache?
+            do {
+                // The engine owns migration of the old history database. Do this before
+                // SQLite creates any cache table, otherwise an empty new DB could mask history.
+                let p = Process(); p.executableURL = executable; p.arguments = ["history-path"]
+                let output = Pipe(); let errors = Pipe(); p.standardOutput = output; p.standardError = errors
+                try p.run()
+                let data = output.fileHandleForReading.readDataToEndOfFile(); p.waitUntilExit()
+                guard p.terminationStatus == 0 else {
+                    throw NSError(domain: "Yeti3", code: 5, userInfo: [NSLocalizedDescriptionKey: String(decoding: errors.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)])
+                }
+                cache = try DiskCache(path: String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines))
+                if let saved = try cache?.load(url) {
+                    DispatchQueue.main.async {
+                        guard !cancellation.cancelled else { return }
+                        self.entries = saved.entries
+                        self.cacheStatus = "Снимок от \(saved.savedAt.formatted(date: .abbreviated, time: .shortened)) · \(saved.complete ? "обход завершён" : "неполный") · обновляем…"
+                    }
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    guard !cancellation.cancelled else { return }
+                    self.cacheStatus = "Кэш недоступен: \(error.localizedDescription)"
+                }
+            }
+            guard !cancellation.cancelled else { return }
+            var lastSave = Date.distantPast
+            func persist(_ entries: [Entry], complete: Bool) {
+                guard let cache else { return }
+                do { try cache.save(url, entries: entries, started: started, complete: complete) }
+                catch {
+                    DispatchQueue.main.async {
+                        guard !cancellation.cancelled else { return }
+                        self.cacheStatus = "Снимок не сохранён: \(error.localizedDescription)"
+                    }
+                }
+            }
             let result = Result { try scan(url, token: cancellation, progress: { n in
-                DispatchQueue.main.async { if !cancellation.cancelled { self.status = "Просмотрено объектов: \(n.formatted())" } }
+                DispatchQueue.main.async {
+                    if !cancellation.cancelled { self.status = "Просмотрено объектов: \(n.formatted()) · размеры ещё уточняются" }
+                }
             }, snapshot: { entries in
+                // Keep a cached map visible until actual live results arrive.
+                guard !entries.isEmpty, !cancellation.cancelled else { return }
                 DispatchQueue.main.async {
                     guard !cancellation.cancelled else { return }
                     self.entries = entries
+                    if self.cacheStatus.hasPrefix("Снимок от") { self.cacheStatus = "Показываем текущее сканирование · размеры неполные" }
+                }
+                if Date().timeIntervalSince(lastSave) >= 2 {
+                    persist(entries, complete: false); lastSave = Date()
                 }
             }) }
+            if case .success(let entries) = result, !entries.isEmpty || !cancellation.cancelled {
+                persist(entries, complete: !cancellation.cancelled && entries.allSatisfy { $0.errors == 0 })
+            }
             DispatchQueue.main.async {
                 guard !cancellation.cancelled else { return }
                 self.busy = false
                 switch result {
                 case .success(let entries):
                     self.entries = entries
+                    if !self.cacheStatus.contains("недоступен") && !self.cacheStatus.contains("не сохранён") {
+                        self.cacheStatus = "Снимок сохранён · \(Date().formatted(date: .abbreviated, time: .shortened))"
+                    }
                     let errors = entries.reduce(0) { $0 + $1.errors }
                     self.status = errors == 0 ? "Сканирование завершено · \(entries.count) объектов" : "Неполный результат: пропущено \(errors) недоступных объектов. Проверьте доступ к диску в настройках macOS."
-                case .failure(let error): self.status = "Папка недоступна"; self.error = error.localizedDescription
+                case .failure(let error): self.status = "Папка недоступна · сохранённый снимок может быть устаревшим"; self.error = error.localizedDescription
                 }
             }
         }
     }
-    func cancel() { token.cancel(); busy = false; status = "Остановлено · показана только прочитанная часть диска. Размеры неполные." }
+    func cancel() { token.cancel(); busy = false; cacheStatus = cacheStatus.replacingOccurrences(of: " · обновляем…", with: " · сохранённый результат"); status = "Остановлено · показана только прочитанная часть диска. Размеры неполные." }
     func showPreview() {
         guard !previewBusy else { return }; previewBusy = true; preview = "Подготавливаем список…"
         let executable = engine
@@ -162,10 +233,10 @@ struct DiskView: View {
                 Image(systemName: "sun.max.fill").font(.system(size: 31)).foregroundStyle(cyan)
                 VStack(alignment: .leading) { Text("YETI³ · Карта диска · Предрелиз").font(.title2.bold()); Text("Посмотрите, что занимает место. Решайте, что очищать.").foregroundStyle(.secondary) }
                 Spacer()
-                Picker("Раздел", selection: $tab) { Text("Обзор").tag(0); Text("Каталоги").tag(1); Text("Обновление").tag(2) }.pickerStyle(.segmented).frame(width: 320)
+                Picker("Раздел", selection: $tab) { Text("Обзор").tag(0); Text("Настройки").tag(1); Text("Обновление").tag(2) }.pickerStyle(.segmented).frame(width: 320)
             }
             Divider()
-            if tab == 0 { mapView } else if tab == 1 { rulesView } else { updateView }
+            if tab == 0 { mapView } else if tab == 1 { ScrollView { VStack(alignment: .leading, spacing: 24) { SettingsPanel(model: model); rulesView } } } else { updateView }
             Spacer(minLength: 0)
         }
         .padding(24).frame(minWidth: 1000, minHeight: 720)
@@ -183,7 +254,12 @@ struct DiskView: View {
         .onAppear {
             NSApp.setActivationPolicy(.regular); NSApp.activate(ignoringOtherApps: true)
             if let i = CommandLine.arguments.firstIndex(of: "--scan"), CommandLine.arguments.count > i + 1 { model.start(URL(fileURLWithPath: CommandLine.arguments[i + 1])) }
+            else if !CommandLine.arguments.contains("--updates") && !CommandLine.arguments.contains("--settings") {
+                let path = UserDefaults.standard.string(forKey: "lastDiskMapRoot") ?? FileManager.default.homeDirectoryForCurrentUser.path
+                model.start(URL(fileURLWithPath: path))
+            }
             if CommandLine.arguments.contains("--updates") { tab = 2; model.checkUpdate() }
+            if CommandLine.arguments.contains("--settings") { tab = 1 }
         }
     }
     private var mapView: some View {
@@ -197,6 +273,7 @@ struct DiskView: View {
                 if model.busy { ProgressView().controlSize(.small); Button("Остановить") { model.cancel() } }
                 else { Button { model.start(model.root) } label: { Label("Сканировать", systemImage: "arrow.clockwise") } }
             }
+            if !model.cacheStatus.isEmpty { Text(model.cacheStatus).font(.caption).foregroundStyle(.secondary) }
             Text(model.root.path).font(.system(.callout, design: .monospaced)).textSelection(.enabled).lineLimit(1).truncationMode(.middle)
             HStack(alignment: .top, spacing: 20) {
                 VStack(spacing: 12) {
@@ -263,7 +340,7 @@ struct DiskView: View {
             Label("Документы, проекты, фото, системные папки и профили браузеров защищены. Добавление папки ничего не удаляет.", systemImage: "lock.shield").font(.callout).foregroundStyle(cyan)
             Text("Safari: очищается только кэш. Cleaner не удаляет историю, cookies, пароли и базы сессий. Состояние вкладок и проигрывателя зависит также от браузера и сайта.").font(.callout).foregroundStyle(.secondary)
             Button("Показать план очистки…") { showPreview = true; model.showPreview() }.disabled(model.previewBusy)
-            Text("Основные категории и возраст файлов настраиваются в меню Y³ → Настройки.").font(.caption).foregroundStyle(.secondary)
+
         }.onAppear { model.reloadRules() }
     }
     private func ruleList(_ title: String, paths: [String], excluded: Bool) -> some View {

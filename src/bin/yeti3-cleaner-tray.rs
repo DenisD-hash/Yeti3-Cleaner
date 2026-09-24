@@ -327,17 +327,17 @@ define_class!(
 
         #[unsafe(method(openDiskMap:))]
         fn open_disk_map(&self, _sender: Option<&AnyObject>) {
-            open_disk_helper(false);
+            open_disk_helper(None);
         }
 
         #[unsafe(method(checkUpdates:))]
         fn check_updates(&self, _sender: Option<&AnyObject>) {
-            open_disk_helper(true);
+            open_disk_helper(Some("--updates"));
         }
 
         #[unsafe(method(openSettings:))]
         fn open_settings(&self, _sender: Option<&AnyObject>) {
-            show_settings_window(self);
+            open_disk_helper(Some("--settings"));
         }
 
         #[unsafe(method(toggleSetting:))]
@@ -3650,11 +3650,11 @@ fn main() {
     app.run();
 }
 
-fn open_disk_helper(updates: bool) {
+fn open_disk_helper(view: Option<&str>) {
     let engine = cleaner_path();
     let helper = engine.parent().unwrap().parent().unwrap().join("Helpers/Yeti3-DiskMap.app");
     let mut command = Command::new("/usr/bin/open");
     command.arg("-a").arg(helper);
-    if updates { command.args(["-n", "--args", "--updates"]); }
+    if let Some(view) = view { command.args(["-n", "--args", view]); }
     if let Err(error) = command.spawn() { eprintln!("Карта диска: {error}"); }
 }
