@@ -16,7 +16,7 @@ final class Cancellation: @unchecked Sendable {
 }
 // Enumerate metadata only. Symlinks and other mounted volumes are never followed.
 // Each navigation scans one subtree, keeping only its immediate children in memory.
-func scan(_ root: URL, token: Cancellation, progress: @escaping (Int) -> Void, snapshot: ([Entry]) -> Void = { _ in }, publishInterval: TimeInterval = 0.15) throws -> [Entry] {
+func scan(_ root: URL, token: Cancellation, progress: @escaping (Int) -> Void, snapshot: ([Entry]) -> Void = { _ in }, publishInterval: TimeInterval = 0.15, entryProgress: (Entry, Int) -> Void = { _, _ in }) throws -> [Entry] {
     let fm = FileManager.default
     let keys: Set<URLResourceKey> = [.isDirectoryKey, .isSymbolicLinkKey, .fileSizeKey]
     let children = try fm.contentsOfDirectory(at: root, includingPropertiesForKeys: Array(keys))
@@ -41,6 +41,7 @@ func scan(_ root: URL, token: Cancellation, progress: @escaping (Int) -> Void, s
             if v.isSymbolicLink == true { continue }
             if directory {
                 if root.path == "/" && child.lastPathComponent == "Volumes" { continue }
+                entryProgress(Entry(url: child, bytes: 0, directory: true, errors: 0), count)
                 let rootVolume = try device(child)
                 if let walk = fm.enumerator(at: child, includingPropertiesForKeys: Array(keys), options: [], errorHandler: { _, _ in errors += 1; return true }) {
                     for case let item as URL in walk {
@@ -52,6 +53,7 @@ func scan(_ root: URL, token: Cancellation, progress: @escaping (Int) -> Void, s
                             if a.isDirectory != true { bytes += Int64(a.fileSize ?? 0) }
                         } catch { errors += 1 }
                         count += 1
+                        entryProgress(Entry(url: child, bytes: bytes, directory: directory, errors: errors), count)
                         if count % 64 == 0 {
                             publish(Entry(url: child, bytes: bytes, directory: directory, errors: errors))
                         }
@@ -61,6 +63,7 @@ func scan(_ root: URL, token: Cancellation, progress: @escaping (Int) -> Void, s
         } catch { errors += 1 }
         result.append(Entry(url: child, bytes: bytes, directory: directory, errors: errors))
         count += 1
+        entryProgress(Entry(url: child, bytes: bytes, directory: directory, errors: errors), count)
         publish()
     }
     publish(force: true)

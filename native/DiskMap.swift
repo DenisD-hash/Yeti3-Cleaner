@@ -3,7 +3,7 @@ import AppKit
 import CryptoKit
 
 private let support = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/Yeti3-Cleaner")
-private let releaseVersion = Bundle.main.object(forInfoDictionaryKey: "YetiReleaseVersion") as? String ?? "0.4.1-rc.2"
+private let releaseVersion = Bundle.main.object(forInfoDictionaryKey: "YetiReleaseVersion") as? String ?? "0.4.1-rc.3"
 private let cyan = Color(red: 0.2, green: 0.85, blue: 0.95)
 private func human(_ bytes: Int64) -> String { ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file) }
 
@@ -83,6 +83,12 @@ private func human(_ bytes: Int64) -> String { ByteCountFormatter.string(fromByt
         UserDefaults.standard.set(url.path, forKey: "lastDiskMapRoot")
         let executable = engine
         let started = Date()
+        let live = LiveScan { entries, count in
+            guard !cancellation.cancelled, self.busy else { return }
+            self.entries = entries
+            self.status = "Просмотрено объектов: \(count.formatted()) · размеры ещё уточняются"
+            if self.cacheStatus.hasPrefix("Снимок от") { self.cacheStatus = "Показываем текущее сканирование · размеры неполные" }
+        }
         DispatchQueue.global(qos: .utility).async {
             var cache: DiskCache?
             do {
@@ -121,20 +127,12 @@ private func human(_ bytes: Int64) -> String { ByteCountFormatter.string(fromByt
                     }
                 }
             }
-            let result = Result { try scan(url, token: cancellation, progress: { n in
-                DispatchQueue.main.async {
-                    if !cancellation.cancelled { self.status = "Просмотрено объектов: \(n.formatted()) · размеры ещё уточняются" }
-                }
-            }, snapshot: { entries in
-                // Keep a cached map visible until actual live results arrive.
-                guard !entries.isEmpty, !cancellation.cancelled else { return }
-                DispatchQueue.main.async {
-                    guard !cancellation.cancelled else { return }
-                    self.entries = entries
-                    if self.cacheStatus.hasPrefix("Снимок от") { self.cacheStatus = "Показываем текущее сканирование · размеры неполные" }
-                }
+            let result = Result { try scan(url, token: cancellation, progress: { _ in }, entryProgress: { entry, count in
+                guard !cancellation.cancelled else { return }
+                live.receive(entry, count: count)
+                // Only disk persistence is rate limited. UI delivery is immediate.
                 if Date().timeIntervalSince(lastSave) >= 2 {
-                    persist(entries, complete: false); lastSave = Date()
+                    persist(live.snapshot(), complete: false); lastSave = Date()
                 }
             }) }
             if case .success(let entries) = result, !entries.isEmpty || !cancellation.cancelled {

@@ -29,6 +29,14 @@ import Foundation
         precondition(entries[0].bytes == 456 && entries[1].bytes == 123)
         precondition(entries[1].directory)
         precondition(entries.allSatisfy { $0.errors == 0 })
+        var delivered = 0
+        let immediate = Cancellation()
+        _ = try scan(root.appendingPathComponent("folder/nested"), token: immediate, progress: { _ in }, entryProgress: { entry, count in
+            delivered += 1
+            precondition(count == 1 && entry.bytes > 0)
+            immediate.cancel()
+        })
+        precondition(delivered == 1, "First file must be delivered without waiting for a batch or timer")
         let cancelled = Cancellation(); cancelled.cancel()
         let cancelledResult = try scan(root, token: cancelled, progress: { _ in })
         precondition(cancelledResult.isEmpty)

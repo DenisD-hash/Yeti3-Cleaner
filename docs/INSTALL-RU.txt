@@ -1,4 +1,4 @@
-YETI³ Cleaner 0.4.1-rc.2 — ПРЕДРЕЛИЗ
+YETI³ Cleaner 0.4.1-rc.3 — ПРЕДРЕЛИЗ
 Universal: Apple Silicon и Intel x86_64, macOS 14 и новее.
 Эта сборка не предназначена для PowerPC и более старых ОС; отдельный порт ещё не готов.
 
