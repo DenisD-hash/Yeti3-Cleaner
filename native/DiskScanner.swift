@@ -16,11 +16,22 @@ final class Cancellation: @unchecked Sendable {
 }
 // Enumerate metadata only. Symlinks and other mounted volumes are never followed.
 // Each navigation scans one subtree, keeping only its immediate children in memory.
-func scan(_ root: URL, token: Cancellation, progress: @escaping (Int) -> Void) throws -> [Entry] {
+func scan(_ root: URL, token: Cancellation, progress: @escaping (Int) -> Void, snapshot: ([Entry]) -> Void = { _ in }, publishInterval: TimeInterval = 0.15) throws -> [Entry] {
     let fm = FileManager.default
     let keys: Set<URLResourceKey> = [.isDirectoryKey, .isSymbolicLinkKey, .fileSizeKey]
     let children = try fm.contentsOfDirectory(at: root, includingPropertiesForKeys: Array(keys))
     var result: [Entry] = []; var count = 0
+    var lastEmission = ProcessInfo.processInfo.systemUptime
+    func publish(_ current: Entry? = nil, force: Bool = false) {
+        let now = ProcessInfo.processInfo.systemUptime
+        guard force || now - lastEmission >= publishInterval else { return }
+        lastEmission = now
+        var partial = result
+        if let current { partial.append(current) }
+        snapshot(partial.sorted { $0.bytes > $1.bytes })
+        progress(count)
+    }
+    publish(force: true)
     for child in children {
         if token.cancelled { break }
         var errors = 0; var bytes: Int64 = 0; var directory = false
@@ -41,13 +52,18 @@ func scan(_ root: URL, token: Cancellation, progress: @escaping (Int) -> Void) t
                             if a.isDirectory != true { bytes += Int64(a.fileSize ?? 0) }
                         } catch { errors += 1 }
                         count += 1
-                        if count % 2000 == 0 { progress(count) }
+                        if count % 64 == 0 {
+                            publish(Entry(url: child, bytes: bytes, directory: directory, errors: errors))
+                        }
                     }
                 } else { errors += 1 }
             } else { bytes = Int64(v.fileSize ?? 0) }
         } catch { errors += 1 }
         result.append(Entry(url: child, bytes: bytes, directory: directory, errors: errors))
+        count += 1
+        publish()
     }
+    publish(force: true)
     return result.sorted { $0.bytes > $1.bytes }
 }
 

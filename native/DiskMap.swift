@@ -3,6 +3,7 @@ import AppKit
 import CryptoKit
 
 private let support = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/Yeti3-Cleaner")
+private let releaseVersion = Bundle.main.object(forInfoDictionaryKey: "YetiReleaseVersion") as? String ?? "0.4.1-rc.1"
 private let cyan = Color(red: 0.2, green: 0.85, blue: 0.95)
 private func human(_ bytes: Int64) -> String { ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file) }
 
@@ -18,20 +19,21 @@ private func human(_ bytes: Int64) -> String { ByteCountFormatter.string(fromByt
     @Published var preview = ""
     @Published var previewBusy = false
     @Published var updateStatus = "Проверка только по запросу. Данные о файлах не отправляются."
+    @Published var includePrerelease = releaseVersion.contains("-rc.")
     @Published var updateBusy = false
     @Published var pendingUpdate: UpdateInfo?
     private var token = Cancellation()
     var total: Int64 { entries.reduce(0) { $0 + $1.bytes } }
     var engine: URL { Bundle.main.bundleURL.deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("MacOS/yeti3-cleaner-engine") }
     init() { reloadRules() }
-    func reloadRules() {
+    @discardableResult func reloadRules() -> Bool {
         do {
             let p = support.appendingPathComponent("folders.json")
-            if !FileManager.default.fileExists(atPath: p.path) { include = []; exclude = []; return }
+            if !FileManager.default.fileExists(atPath: p.path) { include = []; exclude = []; return true }
             let data = try JSONSerialization.jsonObject(with: Data(contentsOf: p)) as? [String: [String]]
             guard let data else { throw CocoaError(.fileReadCorruptFile) }
-            include = data["include"] ?? []; exclude = data["exclude"] ?? []
-        } catch { self.error = "Не удалось прочитать правила: \(error.localizedDescription)" }
+            include = data["include"] ?? []; exclude = data["exclude"] ?? []; return true
+        } catch { self.error = "Не удалось прочитать правила: \(error.localizedDescription)"; return false }
     }
     func saveRules(_ additions: [String], _ exclusions: [String]) {
         do {
@@ -42,7 +44,7 @@ private func human(_ bytes: Int64) -> String { ByteCountFormatter.string(fromByt
         } catch { self.error = "Настройки не сохранены: \(error.localizedDescription)" }
     }
     func add(_ url: URL, excluded: Bool) {
-        reloadRules()
+        guard reloadRules() else { return }
         let path = url.standardizedFileURL.resolvingSymlinksInPath().path
         if excluded { saveRules(include, Array(Set(exclude + [path])).sorted()); return }
         do {
@@ -62,9 +64,14 @@ private func human(_ bytes: Int64) -> String { ByteCountFormatter.string(fromByt
         token.cancel(); let cancellation = Cancellation(); token = cancellation
         root = url; entries = []; selected = nil; busy = true; status = "Сканирование…"
         DispatchQueue.global(qos: .utility).async {
-            let result = Result { try scan(url, token: cancellation) { n in
+            let result = Result { try scan(url, token: cancellation, progress: { n in
                 DispatchQueue.main.async { if !cancellation.cancelled { self.status = "Просмотрено объектов: \(n.formatted())" } }
-            } }
+            }, snapshot: { entries in
+                DispatchQueue.main.async {
+                    guard !cancellation.cancelled else { return }
+                    self.entries = entries
+                }
+            }) }
             DispatchQueue.main.async {
                 guard !cancellation.cancelled else { return }
                 self.busy = false
@@ -78,7 +85,7 @@ private func human(_ bytes: Int64) -> String { ByteCountFormatter.string(fromByt
             }
         }
     }
-    func cancel() { token.cancel(); busy = false; entries = []; status = "Сканирование отменено. Неполные размеры не показаны." }
+    func cancel() { token.cancel(); busy = false; status = "Остановлено · показана только прочитанная часть диска. Размеры неполные." }
     func showPreview() {
         guard !previewBusy else { return }; previewBusy = true; preview = "Подготавливаем список…"
         let executable = engine
@@ -97,15 +104,16 @@ private func human(_ bytes: Int64) -> String { ByteCountFormatter.string(fromByt
         Task {
             defer { updateBusy = false }
             do {
-                let url = URL(string: "https://raw.githubusercontent.com/lodos/Yeti3-Cleaner/master/downloads/latest.json")!
+                let channel = includePrerelease ? "latest-prerelease.json" : "latest.json"
+                let url = URL(string: "https://raw.githubusercontent.com/lodos/Yeti3-Cleaner/master/downloads/" + channel)!
                 var request = URLRequest(url: url); request.cachePolicy = .reloadIgnoringLocalCacheData; request.timeoutInterval = 30
                 let (data, response) = try await URLSession.shared.data(for: request)
                 guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw URLError(.badServerResponse) }
-                let current = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.4.0"
+                let current = releaseVersion
                 let os = ProcessInfo.processInfo.operatingSystemVersion
-                let release = try validateUpdate(data, osVersion: "\(os.majorVersion).\(os.minorVersion)")
-                if release.version.compare(current, options: .numeric) == .orderedDescending {
-                    pendingUpdate = release; updateStatus = "Доступна \(release.version) · macOS \(release.minimum_macos)+"
+                let release = try validateUpdate(data, osVersion: "\(os.majorVersion).\(os.minorVersion)", allowPrerelease: includePrerelease)
+                if let next = ReleaseVersion(release.version), let installed = ReleaseVersion(current), next > installed {
+                    pendingUpdate = release; updateStatus = "Доступна \(release.version)\(release.prerelease == true ? " · ПРЕДРЕЛИЗ" : "") · macOS \(release.minimum_macos)+"
                 } else { updateStatus = "Установлена последняя версия: \(current)" }
             } catch { updateStatus = "Не удалось проверить обновление: \(error.localizedDescription). Можно повторить позже." }
         }
@@ -152,7 +160,7 @@ struct DiskView: View {
         VStack(alignment: .leading, spacing: 18) {
             HStack {
                 Image(systemName: "sun.max.fill").font(.system(size: 31)).foregroundStyle(cyan)
-                VStack(alignment: .leading) { Text("YETI³ · Карта диска").font(.title2.bold()); Text("Посмотрите, что занимает место. Решайте, что очищать.").foregroundStyle(.secondary) }
+                VStack(alignment: .leading) { Text("YETI³ · Карта диска · Предрелиз").font(.title2.bold()); Text("Посмотрите, что занимает место. Решайте, что очищать.").foregroundStyle(.secondary) }
                 Spacer()
                 Picker("Раздел", selection: $tab) { Text("Обзор").tag(0); Text("Каталоги").tag(1); Text("Обновление").tag(2) }.pickerStyle(.segmented).frame(width: 320)
             }
@@ -186,7 +194,7 @@ struct DiskView: View {
                 Button("Выбрать папку / диск…") { model.choose { model.start($0) } }
                 Button { model.start(model.root.deletingLastPathComponent()) } label: { Image(systemName: "arrow.up") }.disabled(model.root.path == "/")
                 Spacer()
-                if model.busy { ProgressView().controlSize(.small); Button("Отмена") { model.cancel() } }
+                if model.busy { ProgressView().controlSize(.small); Button("Остановить") { model.cancel() } }
                 else { Button { model.start(model.root) } label: { Label("Сканировать", systemImage: "arrow.clockwise") } }
             }
             Text(model.root.path).font(.system(.callout, design: .monospaced)).textSelection(.enabled).lineLimit(1).truncationMode(.middle)
@@ -203,7 +211,11 @@ struct DiskView: View {
                                 .help("\(entry.url.lastPathComponent) · \(human(entry.bytes))\(entry.directory ? " · Открыть папку" : "")")
                                 .accessibilityLabel("\(entry.url.lastPathComponent), \(human(entry.bytes))")
                         }
-                        VStack { Text(human(model.total)).font(.title2.bold()); Text("найдено").foregroundStyle(.secondary).font(.caption) }
+                        VStack(spacing: 8) {
+                            if model.busy { ProgressView().controlSize(.regular) }
+                            Text(human(model.total)).font(.title2.bold())
+                            Text(model.busy ? "Читаем диск…" : "найдено").foregroundStyle(.secondary).font(.caption)
+                        }
                     }.frame(width: 410, height: 410)
                     Text("Чем больше размер — тем длиннее луч.\nНажмите каталог, чтобы увидеть его содержимое.").font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
                     if model.entries.count > 180 { Text("На диаграмме 180 крупнейших объектов. Полный список справа.").font(.caption).foregroundStyle(.secondary) }
@@ -261,7 +273,7 @@ struct DiskView: View {
                 VStack(alignment: .leading, spacing: 10) {
                     if paths.isEmpty { Text(excluded ? "Дополнительных исключений нет" : "Используются только пресеты").foregroundStyle(.secondary) }
                     ForEach(paths, id: \.self) { path in
-                        HStack { Text(path).font(.system(.caption, design: .monospaced)).textSelection(.enabled); Spacer(); Button { model.reloadRules(); model.saveRules(excluded ? model.include : model.include.filter { $0 != path }, excluded ? model.exclude.filter { $0 != path } : model.exclude) } label: { Image(systemName: "minus.circle") }.help("Убрать правило; файлы останутся") }
+                        HStack { Text(path).font(.system(.caption, design: .monospaced)).textSelection(.enabled); Spacer(); Button { guard model.reloadRules() else { return }; model.saveRules(excluded ? model.include : model.include.filter { $0 != path }, excluded ? model.exclude.filter { $0 != path } : model.exclude) } label: { Image(systemName: "minus.circle") }.help("Убрать правило; файлы останутся") }
                     }
                 }
             }.frame(height: 240)
@@ -276,7 +288,8 @@ struct DiskView: View {
     private var updateView: some View {
         VStack(alignment: .leading, spacing: 20) {
             Label("Обновление YETI³ Cleaner", systemImage: "arrow.down.circle").font(.title.bold())
-            Text("Версия \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.4.0") · Apple Silicon · macOS 14+").foregroundStyle(.secondary)
+            Text("Предрелиз \(releaseVersion) · Intel + Apple Silicon · macOS 14+").foregroundStyle(.secondary)
+            Toggle("Получать предварительные версии", isOn: $model.includePrerelease).onChange(of: model.includePrerelease) { _, _ in model.pendingUpdate = nil }
             Text(model.updateStatus).textSelection(.enabled)
             HStack {
                 Button("Проверить обновление") { model.checkUpdate() }.disabled(model.updateBusy)

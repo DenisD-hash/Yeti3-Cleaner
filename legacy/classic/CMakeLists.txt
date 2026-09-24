@@ -1,0 +1,5 @@
+cmake_minimum_required(VERSION 3.12)
+project(Yeti3Classic C)
+add_application(Yeti3Classic main.c)
+target_compile_options(Yeti3Classic PRIVATE -mcpu=601 -Wall -Wextra)
+target_link_libraries(Yeti3Classic -lm)

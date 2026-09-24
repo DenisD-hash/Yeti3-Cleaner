@@ -1,0 +1,2 @@
+8d9a9b6bcf995b130e65ee2d781c823c16546e7fd1f872211595baa1f4f2ed79  Yeti3-Cleaner-0.4.1-rc.1-universal.dmg
+19f5e221179759b2ac0d5aa273f1c4ac67f985ff6e365e7d954fc58681f10067  Yeti3-Cleaner-0.4.1-rc.1-universal.zip

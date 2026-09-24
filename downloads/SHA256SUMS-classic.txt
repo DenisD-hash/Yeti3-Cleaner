@@ -1,0 +1,2 @@
+67e2713cd2c53da89eb7b4e06b8d8be17977ab31d7d2dfa76860aab6b05da53a  Yeti3-Classic-0.4.1-rc.1-experimental-ppc.bin
+a72dfc9eab2ab6ff180223573facc99b49f71fe0c7eba365b0d5729a87a5712b  Yeti3-Classic-0.4.1-rc.1-experimental-ppc.dsk

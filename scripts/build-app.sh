@@ -6,7 +6,10 @@ cd "$ROOT"
 
 VERSION="$(awk -F'"' '/^version = / {print $2; exit}' Cargo.toml)"
 
-APP="$ROOT/dist/Yeti3-Cleaner.app"
+ARCH="${1:-universal}"
+case "$ARCH" in arm64|x86_64|universal) ;; *) echo "Expected arm64, x86_64 or universal" >&2; exit 2;; esac
+BUNDLE_VERSION="${VERSION%%-*}"
+APP="$ROOT/dist/$ARCH/Yeti3-Cleaner.app"
 CONTENTS="$APP/Contents"
 MACOS="$CONTENTS/MacOS"
 RESOURCES="$CONTENTS/Resources"
@@ -22,10 +25,19 @@ test -s "$LAUNCHER/frame-23.png"
 
 printf '\n===== BUILD RELEASE =====\n'
 
-MACOSX_DEPLOYMENT_TARGET=14.0 RUSTFLAGS="-D warnings" \
-cargo build --release \
-  --bin yeti3-cleaner \
-  --bin yeti3-cleaner-tray
+BUILD_ARCHES=(arm64 x86_64)
+if [ "$ARCH" != universal ]; then BUILD_ARCHES=("$ARCH"); fi
+for CPU in "${BUILD_ARCHES[@]}"; do
+  TARGET=aarch64-apple-darwin
+  if [ "$CPU" = x86_64 ]; then TARGET=x86_64-apple-darwin; fi
+  RUSTC="$(rustup which --toolchain 1.86.0 rustc)" MACOSX_DEPLOYMENT_TARGET=14.0 RUSTFLAGS="-D warnings" \
+    rustup run 1.86.0 cargo build --release --target "$TARGET" \
+    --bin yeti3-cleaner --bin yeti3-cleaner-tray
+  mkdir -p "target/$CPU"
+  xcrun swiftc -O -parse-as-library -target "$CPU-apple-macosx14.0" \
+    native/DiskScanner.swift native/UpdatePolicy.swift native/DiskMap.swift \
+    -o "target/$CPU/yeti3-disk-map"
+done
 
 printf '\n===== APP BUNDLE =====\n'
 
@@ -35,13 +47,15 @@ mkdir -p \
   "$MACOS" \
   "$RESOURCES"
 
-cp -f \
-  target/release/yeti3-cleaner-tray \
-  "$MACOS/Yeti3-Cleaner"
-
-cp -f \
-  target/release/yeti3-cleaner \
-  "$MACOS/yeti3-cleaner-engine"
+if [ "$ARCH" = universal ]; then
+  lipo -create target/aarch64-apple-darwin/release/yeti3-cleaner-tray target/x86_64-apple-darwin/release/yeti3-cleaner-tray -output "$MACOS/Yeti3-Cleaner"
+  lipo -create target/aarch64-apple-darwin/release/yeti3-cleaner target/x86_64-apple-darwin/release/yeti3-cleaner -output "$MACOS/yeti3-cleaner-engine"
+else
+  TARGET=aarch64-apple-darwin
+  if [ "$ARCH" = x86_64 ]; then TARGET=x86_64-apple-darwin; fi
+  cp "target/$TARGET/release/yeti3-cleaner-tray" "$MACOS/Yeti3-Cleaner"
+  cp "target/$TARGET/release/yeti3-cleaner" "$MACOS/yeti3-cleaner-engine"
+fi
 
 printf '\n===== PREMIUM RESOURCES =====\n'
 
@@ -83,10 +97,15 @@ cat > "$CONTENTS/Info.plist" <<PLIST
     <string>Yeti3.icns</string>
 
     <key>CFBundleShortVersionString</key>
-    <string>${VERSION}</string>
+    <string>${BUNDLE_VERSION}</string>
 
     <key>CFBundleVersion</key>
+    <string>${BUNDLE_VERSION}</string>
+
+    <key>YetiReleaseVersion</key>
     <string>${VERSION}</string>
+    <key>YetiReleaseChannel</key>
+    <string>prerelease</string>
 
     <key>LSMinimumSystemVersion</key>
     <string>14.0</string>
@@ -106,8 +125,11 @@ chmod 755 \
 
 HELPER="$CONTENTS/Helpers/Yeti3-DiskMap.app"
 mkdir -p "$HELPER/Contents/MacOS" "$HELPER/Contents/Resources"
-xcrun swiftc -O -parse-as-library -target arm64-apple-macosx14.0 \
-  native/DiskScanner.swift native/UpdatePolicy.swift native/DiskMap.swift -o "$HELPER/Contents/MacOS/yeti3-disk-map"
+if [ "$ARCH" = universal ]; then
+  lipo -create target/arm64/yeti3-disk-map target/x86_64/yeti3-disk-map -output "$HELPER/Contents/MacOS/yeti3-disk-map"
+else
+  cp "target/$ARCH/yeti3-disk-map" "$HELPER/Contents/MacOS/yeti3-disk-map"
+fi
 cp "$ICON" "$HELPER/Contents/Resources/Yeti3.icns"
 cat > "$HELPER/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -118,8 +140,10 @@ cat > "$HELPER/Contents/Info.plist" <<PLIST
 <key>CFBundleExecutable</key><string>yeti3-disk-map</string>
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleIconFile</key><string>Yeti3.icns</string>
-<key>CFBundleShortVersionString</key><string>${VERSION}</string>
-<key>CFBundleVersion</key><string>${VERSION}</string>
+<key>CFBundleShortVersionString</key><string>${BUNDLE_VERSION}</string>
+<key>CFBundleVersion</key><string>${BUNDLE_VERSION}</string>
+<key>YetiReleaseVersion</key><string>${VERSION}</string>
+<key>YetiReleaseChannel</key><string>prerelease</string>
 <key>LSMinimumSystemVersion</key><string>14.0</string>
 </dict></plist>
 PLIST

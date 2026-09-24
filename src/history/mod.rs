@@ -74,6 +74,11 @@ impl HistoryDb {
             fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
         }
 
+        let home = dirs::home_dir().context("cannot determine HOME")?;
+        migrate_legacy_database(
+            &home.join("Library/Application Support/Yeti3-Cleaner/history.sqlite3"),
+            &path,
+        )?;
         let conn = Connection::open(&path).with_context(|| format!("open {}", path.display()))?;
 
         let db = Self { conn };
@@ -489,7 +494,35 @@ impl HistoryDb {
 pub fn database_path() -> Result<PathBuf> {
     let home = dirs::home_dir().context("cannot determine HOME")?;
 
-    Ok(home.join("Library/Application Support/Yeti3-Cleaner/history.sqlite3"))
+    Ok(home.join("Documents/Yeti3Cleaner/history.sqlite3"))
+}
+
+// VACUUM INTO takes a consistent SQLite snapshot, including committed WAL pages.
+// Keep the old database as a recovery copy. Never overwrite an existing destination.
+fn migrate_legacy_database(old: &Path, destination: &Path) -> Result<()> {
+    if destination.try_exists()? || !old.try_exists()? { return Ok(()); }
+    let parent = destination.parent().context("database has no parent")?;
+    fs::create_dir_all(parent)?;
+    let temporary = parent.join(format!(".history-migration-{}-{}.sqlite3", std::process::id(),
+        SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos()));
+    let result = (|| -> Result<()> {
+        let source = Connection::open_with_flags(old, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        source.busy_timeout(std::time::Duration::from_secs(5))?;
+        source.execute("VACUUM INTO ?1", [temporary.to_str().context("invalid database path")?])?;
+        let check = Connection::open_with_flags(&temporary, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        let integrity: String = check.query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
+        anyhow::ensure!(integrity == "ok", "history migration integrity check failed: {integrity}");
+        drop(check);
+        fs::File::open(&temporary)?.sync_all()?;
+        match fs::hard_link(&temporary, destination) {
+            Ok(()) => (),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => (),
+            Err(e) => return Err(e.into()),
+        }
+        Ok(())
+    })();
+    let _ = fs::remove_file(&temporary);
+    result.context("cannot migrate history to Documents/Yeti3Cleaner; original database preserved")
 }
 
 fn now() -> i64 {
@@ -816,6 +849,30 @@ impl HistoryDb {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn migration_preserves_wal_and_existing_destination() -> Result<()> {
+        let root = std::env::temp_dir().join(format!("yeti-history-test-{}-{}", std::process::id(), SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos()));
+        fs::create_dir_all(&root)?;
+        let old = root.join("old.sqlite3");
+        let new = root.join("Documents/Yeti3Cleaner/history.sqlite3");
+        let source = Connection::open(&old)?;
+        source.execute_batch("PRAGMA journal_mode=WAL; CREATE TABLE sample(value); INSERT INTO sample VALUES(42);")?;
+        migrate_legacy_database(&old, &new)?;
+        let target = Connection::open(&new)?;
+        assert_eq!(target.query_row("SELECT value FROM sample", [], |row| row.get::<_, i64>(0))?, 42);
+        source.execute("INSERT INTO sample VALUES(99)", [])?;
+        migrate_legacy_database(&old, &new)?;
+        assert_eq!(target.query_row("SELECT count(*) FROM sample", [], |row| row.get::<_, i64>(0))?, 1);
+        assert!(old.exists());
+        drop(target); drop(source);
+        fs::remove_file(&new)?;
+        fs::write(&old, b"corrupt database")?;
+        assert!(migrate_legacy_database(&old, &new).is_err());
+        assert!(!new.exists());
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
 
     #[test]
     fn unsigned_database_conversion_is_safe() {

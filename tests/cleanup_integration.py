@@ -6,7 +6,7 @@ import tempfile
 import time
 from pathlib import Path
 
-engine = Path(__file__).resolve().parents[1] / 'target/release/yeti3-cleaner'
+engine = Path(os.environ.get('YETI_TEST_ENGINE', str(Path(__file__).resolve().parents[1] / 'target/release/yeti3-cleaner')))
 with tempfile.TemporaryDirectory(prefix='yeti3-cleaner-test-') as temp:
     home = Path(temp).resolve()
     env = {**os.environ, 'HOME': str(home)}
@@ -40,10 +40,11 @@ with tempfile.TemporaryDirectory(prefix='yeti3-cleaner-test-') as temp:
     preview = run('clean', '--max', '--dry-run').stdout
     assert str(remove.parent) in preview and str(custom) in preview
     assert str(keep.parent) not in preview and str(pip.parent) not in preview
-    assert not settings_path.with_name('history.sqlite3').exists(), 'dry run wrote history'
+    assert not (home / 'Documents/Yeti3Cleaner/history.sqlite3').exists(), 'dry run wrote history'
     assert run('check-folder', str(home / 'Documents'), ok=False).returncode != 0
     assert run('check-folder', str(home), ok=False).returncode != 0
     run('clean', '--yes')  # Standard mode, disposable HOME only; no managed cleaners.
+    assert (home / 'Documents/Yeti3Cleaner/history.sqlite3').exists()
     assert not remove.exists() and not custom.exists()
     assert keep.exists() and pip.exists() and docs.exists() and nested_repo.exists()
     # Overlapping cache presets must appear exactly once in a plan.
