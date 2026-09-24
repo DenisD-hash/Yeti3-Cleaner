@@ -364,7 +364,7 @@ struct DiskView: View {
         VStack(alignment: .leading, spacing: 20) {
             Label("Обновление YETI³ Cleaner", systemImage: "arrow.down.circle").font(.title.bold())
             Text("Предрелиз \(releaseVersion) · Intel + Apple Silicon · macOS 14+").foregroundStyle(.secondary)
-            Toggle("Получать предварительные версии", isOn: $model.includePrerelease).onChange(of: model.includePrerelease) { _, _ in model.pendingUpdate = nil }
+            Toggle("Получать предварительные версии", isOn: $model.includePrerelease).onChange(of: model.includePrerelease) { _ in model.pendingUpdate = nil }
             Text(model.updateStatus).textSelection(.enabled)
             HStack {
                 Button("Проверить обновление") { model.checkUpdate() }.disabled(model.updateBusy)
