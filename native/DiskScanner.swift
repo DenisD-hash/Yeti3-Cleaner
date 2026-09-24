@@ -8,6 +8,21 @@ struct Entry: Identifiable, Codable {
     let directory: Bool
     let errors: Int
 }
+
+struct VolumeUsage {
+    let capacity: Int64
+    let used: Int64
+}
+
+// Filesystem capacity is a separate measurement from summing file sizes.
+// APFS clones and sparse files can make the latter larger than the device.
+func volumeUsage(at root: URL) -> VolumeUsage? {
+    guard let attributes = try? FileManager.default.attributesOfFileSystem(forPath: root.path),
+          let capacity = (attributes[.systemSize] as? NSNumber)?.int64Value,
+          let free = (attributes[.systemFreeSize] as? NSNumber)?.int64Value,
+          capacity > 0, free >= 0, free <= capacity else { return nil }
+    return VolumeUsage(capacity: capacity, used: capacity - free)
+}
 final class Cancellation: @unchecked Sendable {
     private let lock = NSLock()
     private var value = false

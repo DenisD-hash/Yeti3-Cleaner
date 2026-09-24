@@ -10,6 +10,7 @@ private func human(_ bytes: Int64) -> String { ByteCountFormatter.string(fromByt
 
 @MainActor final class DiskModel: ObservableObject {
     @Published var root = FileManager.default.homeDirectoryForCurrentUser
+    @Published var currentVolumeUsage: VolumeUsage? = volumeUsage(at: FileManager.default.homeDirectoryForCurrentUser)
     @Published var entries: [Entry] = []
     @Published var selected: Entry?
     @Published var cacheStatus = ""
@@ -81,6 +82,7 @@ private func human(_ bytes: Int64) -> String { ByteCountFormatter.string(fromByt
     func start(_ url: URL) {
         token.cancel(); let cancellation = Cancellation(); token = cancellation
         root = url; entries = []; selected = nil; busy = true; status = "Читаем сохранённый снимок…"; cacheStatus = ""
+        currentVolumeUsage = volumeUsage(at: url)
         UserDefaults.standard.set(url.path, forKey: "lastDiskMapRoot")
         let executable = engine
         let started = Date()
@@ -274,6 +276,15 @@ struct DiskView: View {
             }
             if !model.cacheStatus.isEmpty { Text(model.cacheStatus).font(.caption).foregroundStyle(.secondary) }
             Text(model.root.path).font(.system(.callout, design: .monospaced)).textSelection(.enabled).lineLimit(1).truncationMode(.middle)
+            if let usage = model.currentVolumeUsage {
+                HStack {
+                    Text("На томе занято: \(human(usage.used)) из \(human(usage.capacity))")
+                        .font(.headline).foregroundStyle(cyan)
+                    Spacer()
+                    Text("Ниже — логические размеры файлов, их сумма может быть больше ёмкости тома")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
             HStack(alignment: .top, spacing: 20) {
                 VStack(spacing: 12) {
                     ZStack {
@@ -290,6 +301,7 @@ struct DiskView: View {
                         VStack(spacing: 8) {
                             if model.busy { ProgressView().controlSize(.regular) }
                             Text(human(model.total)).font(.title2.bold())
+                            Text("Логический размер файлов").font(.caption).foregroundStyle(.secondary)
                             Text(model.busy ? "Читаем диск…" : "найдено").foregroundStyle(.secondary).font(.caption)
                         }
                     }.frame(width: 410, height: 410)
@@ -325,7 +337,7 @@ struct DiskView: View {
                 }.frame(maxWidth: .infinity)
             }
             Text(model.status).font(.callout).foregroundStyle(model.status.contains("Неполный") ? .orange : .secondary)
-            Text("Размеры файлов, а не физически освобождаемое место. Снимки APFS, клоны и закрытые каталоги могут давать расхождение. Ссылки и вложенные тома пропускаются; другой диск выберите отдельно.").font(.caption).foregroundStyle(.secondary)
+            Text("Размеры папок — сумма логических размеров файлов, а не занятое или освобождаемое место. Клоны APFS и разреженные файлы могут дать сумму больше ёмкости тома; недоступные каталоги не учитываются. Ссылки и вложенные тома пропускаются; другой диск выберите отдельно.").font(.caption).foregroundStyle(.secondary)
         }
     }
     private var rulesView: some View {
